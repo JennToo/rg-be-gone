@@ -1,0 +1,22 @@
+[package]
+name = "rg_be_gone"
+version = "0.1.0"
+authors = ["Jennifer Wilcox <jennifer@nitori.org>"]
+edition = "2018"
+
+[dependencies]
+embedded-hal = "0.2.3"
+hifive1 = { version = "0.9.1", features = ["board-hifive1-revb"] }
+panic-halt = "0.2.0"
+riscv = "0.6.0"
+riscv-rt = "0.8.0"
+
+[[bin]]
+name = "rg_be_gone"
+test = false
+bench = false
+
+[profile.release]
+codegen-units = 1
+debug = true
+lto = true

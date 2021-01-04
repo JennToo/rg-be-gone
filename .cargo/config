@@ -1,0 +1,8 @@
+[target.riscv32imac-unknown-none-elf]
+runner = "gdb-multiarch -q -x gdbinit"
+rustflags = [
+  "-C", "link-arg=-Thifive1-link.x",
+]
+
+[build]
+target = "riscv32imac-unknown-none-elf"
