@@ -3,12 +3,17 @@ use hifive1::hal::delay::Delay;
 use hifive1::hal::gpio::{gpio0::Pin10, Floating, Input};
 use hifive1::hal::prelude::*;
 use hifive1::hal::spi::{Spi, SpiX};
+use hifive1::sprintln;
 
-#[derive(Debug)]
+const SSID_INFO: &str = include_str!("../router_info.txt");
+const TIMEOUT_SLICE: u32 = 100; // ms
+
+#[derive(Debug, Eq, PartialEq)]
 pub enum EspError {
     ProtocolError,
     BufferOverflow,
     WouldBlock,
+    MessageTimeout,
 }
 
 pub struct EspWiFi<SPI, PINS> {
@@ -33,11 +38,21 @@ impl<SPI: SpiX, PINS> EspWiFi<SPI, PINS> {
         self.spi.write_iter((0..size).map(|_| 0x00)).unwrap();
     }
 
-    fn wait_for_ready(&mut self) {
-        while self.handshake.is_low().unwrap() {}
+    fn wait_for_ready(&mut self, mut timeout: u32) -> Result<(), EspError> {
+        while self.handshake.is_low().unwrap() && timeout > TIMEOUT_SLICE {
+            Delay.delay_ms(TIMEOUT_SLICE);
+            timeout -= TIMEOUT_SLICE;
+        }
+
+        if self.handshake.is_low().unwrap() {
+            Err(EspError::MessageTimeout)
+        } else {
+            Ok(())
+        }
     }
 
     pub fn send(&mut self, s: &str) {
+        sprintln!("==> {}", s);
         let bytes = s.as_bytes();
         assert!(bytes.len() <= 127);
 
@@ -49,8 +64,12 @@ impl<SPI: SpiX, PINS> EspWiFi<SPI, PINS> {
         Delay.delay_ms(15u32);
     }
 
-    pub fn recv_blocking<'a>(&mut self, buffer: &'a mut [u8]) -> Result<&'a str, EspError> {
-        self.wait_for_ready();
+    pub fn recv_blocking<'a>(
+        &mut self,
+        buffer: &'a mut [u8],
+        timeout: u32,
+    ) -> Result<&'a str, EspError> {
+        self.wait_for_ready(timeout)?;
         self.recv(buffer)
     }
 
@@ -77,6 +96,49 @@ impl<SPI: SpiX, PINS> EspWiFi<SPI, PINS> {
 
         self.transfer(&mut buffer[..n]);
         Delay.delay_ms(15u32);
-        Ok(core::str::from_utf8(&buffer[..n]).unwrap())
+        let converted = core::str::from_utf8(&buffer[..n]).unwrap();
+        sprintln!("<== {}", converted);
+        Ok(converted)
+    }
+
+    fn clear_messages(&mut self) {
+        let mut buffer = [0u8; 256];
+
+        while self.recv(&mut buffer) != Err(EspError::WouldBlock) {
+            sprintln!("(Ignored)");
+        }
+    }
+
+    pub fn expect_message(&mut self, message: &str, timeout: u32) -> Result<(), EspError> {
+        let mut buffer = [0u8; 256];
+
+        loop {
+            let result = self.recv_blocking(&mut buffer, timeout)?;
+            if result == message {
+                return Ok(());
+            }
+        }
+    }
+
+    pub fn is_internet_ok(&mut self) -> Result<(), EspError> {
+        self.clear_messages();
+
+        self.send("AT+CWMODE=0\r\n");
+        self.expect_message("\r\nOK\r\n", 10_000)?;
+
+        self.send("AT+CWMODE=1\r\n");
+        self.expect_message("\r\nOK\r\n", 10_000)?;
+
+        self.send(SSID_INFO);
+        self.expect_message("\r\nOK\r\n", 30_000)?;
+
+        self.send("AT+PING=\"8.8.8.8\"\r\n");
+        self.expect_message("\r\nOK\r\n", 30_000)?;
+
+        // Turn off radio again to save power
+        self.send("AT+CWMODE=0\r\n");
+        self.expect_message("\r\nOK\r\n", 10_000)?;
+
+        Ok(())
     }
 }
